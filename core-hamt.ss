@@ -109,18 +109,6 @@
 (define NOTHING (gensym))
 
 ;; general nodes
-(define (key=? eqtype k1 k2)
-  (case eqtype
-    [(eq)    (eq? k1 k2)]
-    [(equal) (equal? k1 k2)]
-    [else    (eqv? k1 k2)]))
-
-(define (hash-code eqtype key)
-  (case eqtype
-    [(eq)    (eq-hash-code key)]
-    [(equal) (equal-hash-code key)]
-    [else    (eqv-hash-code key)]))
-
 (define (down n)
   (#3%fx+ n NODE-BIT-WIDTH))
 
@@ -147,28 +135,28 @@
     ;; rare
     (f (cnode-hashcode na) k)]))
 
-(define (node-ref eqtype node key keyhash shift)
-  (cond [(cnode? node) (cnode-ref eqtype node key)]
-	[else          (bnode-ref eqtype node key keyhash shift)]))
+(define (node-ref key=? node key keyhash shift)
+  (cond [(cnode? node) (cnode-ref key=? node key)]
+	[else          (bnode-ref key=? node key keyhash shift)]))
 
-(define (node-set eqtype node key val keyhash shift)
-  (cond [(cnode? node) (cnode-set eqtype node key val keyhash shift)]
-	[else          (bnode-set eqtype node key val keyhash shift)]))
+(define (node-set key=? hash-code node key val keyhash shift)
+  (cond [(cnode? node) (cnode-set key=? hash-code node key val keyhash shift)]
+	[else          (bnode-set key=? hash-code node key val keyhash shift)]))
 
-(define (node-remove eqtype node key keyhash shift)
-  (cond [(cnode? node) (cnode-remove eqtype node key)]
-	[else          (bnode-remove eqtype node key keyhash shift)]))
+(define (node-remove key=? node key keyhash shift)
+  (cond [(cnode? node) (cnode-remove key=? node key)]
+	[else          (bnode-remove key=? node key keyhash shift)]))
 
-(define (make-node eqtype key1 val1 k1-hash key2 val2 shift)
-  (let ([k2-hash (hash-code eqtype key2)])
+(define (make-node key=? hash-code key1 val1 k1-hash key2 val2 shift)
+  (let ([k2-hash (hash-code key2)])
     (cond [(#3%fx= k1-hash k2-hash)
 	   (make-cnode (vector key2 val2 key1 val1) k2-hash)]
 	  [else
-	   (let*-values ([(n _) (bnode-set eqtype (empty-bnode eqtype) key2 val2 k2-hash shift)]
-			 [(n _) (bnode-set eqtype n key1 val1 k1-hash shift)])
+	   (let*-values ([(n _) (bnode-set key=? hash-code (empty-bnode key=?) key2 val2 k2-hash shift)]
+			 [(n _) (bnode-set key=? hash-code n key1 val1 k1-hash shift)])
 	     n)])))
 
-(define (node=? eqtype na nb eql? k shift)
+(define (node=? key=? na nb eql? k shift)
   (cond [(eq? na nb) k]
 	[(cnode? na)
 	 (cond [(cnode? nb)
@@ -180,7 +168,7 @@
 			      (cond [(fxzero? i) k]
 				    [else
 				     (let*-values ([(key val) (array-ref aa (fx1- i))]
-						   [(v2) (cnode-ref eqtype nb key)])
+						   [(v2) (cnode-ref key=? nb key)])
 				       (and (not (eq? v2 NOTHING))
 					    (loop (fx1- i) (eql? val v2 k))))])))))]
 	       [else #f])]
@@ -188,10 +176,10 @@
 	 (let ([abm (bnode-bitmap na)]
 	       [bbm (bnode-bitmap nb)])
 	   (and (fx= abm bbm)
-		(array=? eqtype (bnode-array na) abm (bnode-array nb) eql? k shift)))]
+		(array=? key=? (bnode-array na) abm (bnode-array nb) eql? k shift)))]
 	[else #f]))
 
-(define (array=? eqtype aa abm ba eql? k shift)
+(define (array=? key=? aa abm ba eql? k shift)
   ;; This function is called only when `bbm` equals `abm`
   (let ([alen (array-length aa)])
     (let loop ([ai 0] [abit 0] [k k])
@@ -204,18 +192,18 @@
 		    [ak
 		     (cond
 		      [bk
-		       (and (key=? eqtype ak bk)
+		       (and (key=? ak bk)
 			    (eql? av bv k))]
 		      [else #f])]
 		    [bk #f]
 		    [else
-		     (node=? eqtype av bv eql? k (down shift))])])
+		     (node=? key=? av bv eql? k (down shift))])])
 	    (and k
 		 (loop (fx+ ai 1) (fx+ abit 1) k))))]
        [else
 	(loop ai (fx+ abit 1) k)]))))
 
-(define (node-keys-subset? eqtype a b shift)
+(define (node-keys-subset? key=? hash-code a b shift)
   (cond [(eq? a b) #t]
 	[(> (node-count a) (node-count b)) #f]
 	[(cnode? a)
@@ -226,14 +214,14 @@
 			 (cond [(#3%fxzero? i) #t]
 			       [else
 				(let-values ([(k v) (array-ref aa (#3%fx1- i))])
-				  (and (cnode-index eqtype b k)
+				  (and (cnode-index key=? b k)
 				       (loop (#3%fx1- i))))])))]
 		 [else
 		  (let loop ([i (array-length aa)])
 		    (cond [(#3%fxzero? i) #t]
 			  [else
 			   (let-values ([(k v) (array-ref aa (#3%fx1- i))])
-			     (and (not (eq? (bnode-ref eqtype b k (hash-code eqtype k) shift)
+			     (and (not (eq? (bnode-ref key=? b k (hash-code k) shift)
 					    NOTHING))
 				  (loop (#3%fx1- i))))]))]))]
 	[else
@@ -241,16 +229,16 @@
 	   (cond [(cnode? b)
 		  (cond [(#3%fx= 1 (array-length aa))
 			 (let-values ([(k v) (array-ref aa 0)])
-			   (cond [(not k) (node-keys-subset? eqtype v b (down shift))]
-				 [else (cnode-index eqtype b k)]))]
+			   (cond [(not k) (node-keys-subset? key=? hash-code v b (down shift))]
+				 [else (cnode-index key=? b k)]))]
 			[else #f])]
 		 [else
 		  (let ([abm (bnode-bitmap a)]
 			[bbm (bnode-bitmap b)])
 		    (and (#3%fx= abm (#3%fxlogand abm bbm))
-			 (array-keys-subset? eqtype aa abm (bnode-array b) bbm shift)))]))]))
+			 (array-keys-subset? key=? hash-code aa abm (bnode-array b) bbm shift)))]))]))
 
-(define (array-keys-subset? eqtype aa abm ba bbm shift)
+(define (array-keys-subset? key=? hash-code aa abm ba bbm shift)
   (let ([alen (array-length aa)])
     (let loop ([ai 0] [bi 0] [abit 0] [bbit 0])
       (cond [(#3%fx= ai alen) #t]
@@ -260,10 +248,10 @@
 	       (and
 		(cond [(not ak)
 		       (and (not bk)
-			    (node-keys-subset? eqtype av bv (down shift)))]
-		      [bk (key=? eqtype ak bk)]
-		      [(cnode? bv) (cnode-index eqtype bv ak)]
-		      [else (not (eq? (bnode-ref eqtype bv ak (hash-code eqtype ak) (down shift))
+			    (node-keys-subset? key=? hash-code av bv (down shift)))]
+		      [bk (key=? ak bk)]
+		      [(cnode? bv) (cnode-index key=? bv ak)]
+		      [else (not (eq? (bnode-ref key=? bv ak (hash-code ak) (down shift))
 				      NOTHING))])
 		(loop (#3%fx1+ ai) (#3%fx1+ bi) (#3%fx1+ abit) (#3%fx1+ bbit))))]
 	    [(#3%fxlogbit? bbit bbm)
@@ -298,17 +286,15 @@
   [parent bnode]
   [sealed #t])
 
-(define (empty-bnode eqtype)
-  (case eqtype
-    [(eq)    empty-bnode/eq]
-    [(equal) empty-bnode/equal]
-    [else    empty-bnode/eqv]))
+(define (empty-bnode key=?)
+  (cond [(eq? key=? eq?)    empty-bnode/eq]
+	[(eq? key=? equal?) empty-bnode/equal]
+	[else               empty-bnode/eqv]))
 
-(define (make-bnode* eqtype array bitmap count)
-  (case eqtype
-    [(eq)    (make-bnode/eq    array bitmap count)]
-    [(equal) (make-bnode/equal array bitmap count)]
-    [else    (make-bnode/eqv   array bitmap count)]))
+(define (make-bnode* key=? array bitmap count)
+  (cond [(eq? key=? eq?)    (make-bnode/eq    array bitmap count)]
+	[(eq? key=? equal?) (make-bnode/equal array bitmap count)]
+	[else               (make-bnode/eqv   array bitmap count)]))
 
 (define (bnode-bit-pos hashcode shift)
   (#3%fxsll 1 (node-mask hashcode shift)))
@@ -327,7 +313,7 @@
 (define empty-bnode/eqv (make-bnode/eqv empty-array 0 0))
 (define empty-bnode/eq (make-bnode/eq empty-array 0 0))
 
-(define (bnode-ref eqtype node key keyhash shift)
+(define (bnode-ref key=? node key keyhash shift)
   (let* ([bitmap (bnode-bitmap node)]
 	 [bit (bnode-bit-pos keyhash shift)]
 	 [idx (bnode-array-index bitmap bit)])
@@ -335,42 +321,42 @@
 	  [else
 	   (let*-values ([(arr) (bnode-array node)]
 			 [(k v) (array-ref arr idx)])
-	     (cond [(not k) (node-ref eqtype v key keyhash (down shift))]
-		   [(key=? eqtype key k) v]
+	     (cond [(not k) (node-ref key=? v key keyhash (down shift))]
+		   [(key=? key k) v]
 		   [else NOTHING]))])))
 
-(define (bnode-set eqtype node key val keyhash shift)
+(define (bnode-set key=? hash-code node key val keyhash shift)
   (let* ([bitmap (bnode-bitmap node)]
 	 [arr (bnode-array node)]
 	 [bit (bnode-bit-pos keyhash shift)]
 	 [idx (bnode-array-index bitmap bit)]
 	 [count (bnode-count node)])
     (cond [(#3%fxzero? (#3%fxlogand bit bitmap))
-	   (values (make-bnode* eqtype (array-insert arr idx key val) (#3%fxior bitmap bit) (#3%fx1+ count))
+	   (values (make-bnode* key=? (array-insert arr idx key val) (#3%fxior bitmap bit) (#3%fx1+ count))
 		   #t)]
 	  [else
 	   (let-values ([(k v) (array-ref arr idx)])
 	     (cond [(not k)
-		    (let-values ([(new added?) (node-set eqtype v key val keyhash (down shift))])
+		    (let-values ([(new added?) (node-set key=? hash-code v key val keyhash (down shift))])
 		      (cond [(eq? new v) (values node #f)]
-			    [else (values (make-bnode* eqtype
+			    [else (values (make-bnode* key=?
 						       (array-replace-value arr idx new)
 						       bitmap
 						       (if added? (#3%fx1+ count) count))
 					  added?)]))]
-		   [(key=? eqtype key k)
+		   [(key=? key k)
 		    (cond [(eq? val v) (values node #f)]
-			  [else (values (make-bnode* eqtype (array-replace-value arr idx val) bitmap count) #f)])]
+			  [else (values (make-bnode* key=? (array-replace-value arr idx val) bitmap count) #f)])]
 		   [else
 		    (values
 		     (make-bnode*
-		      eqtype
-		      (array-replace arr idx #f (make-node eqtype key val keyhash k v (down shift)))
+		      key=?
+		      (array-replace arr idx #f (make-node key=? hash-code key val keyhash k v (down shift)))
 		      bitmap
 		      (#3%fx1+ count))
 		     #t)]))])))
 
-(define (bnode-remove eqtype node key keyhash shift)
+(define (bnode-remove key=? node key keyhash shift)
   (let* ([bitmap (bnode-bitmap node)]
 	 [arr (bnode-array node)]
 	 [bit (bnode-bit-pos keyhash shift)]
@@ -380,14 +366,14 @@
 	   (let-values ([(count) (bnode-count node)]
 			[(k v) (array-ref arr idx)])
 	     (cond [(not k)
-		    (let ([n (node-remove eqtype v key keyhash (down shift))])
+		    (let ([n (node-remove key=? v key keyhash (down shift))])
 		      (cond [(eq? n v) node]
-			    [n (make-bnode* eqtype (array-replace-value arr idx n) bitmap (#3%fx1- count))]
-			    [(#3%fx= bitmap bit) (if (#3%fxzero? shift) (empty-bnode eqtype) #f)]
-			    [else (make-bnode* eqtype (array-remove arr idx) (#3%fxxor bitmap bit) (#3%fx1- count))]))]
-		   [(key=? eqtype key k)
-		    (cond [(#3%fx= bitmap bit) (if (#3%fxzero? shift) (empty-bnode eqtype) #f)]
-			  [else (make-bnode* eqtype (array-remove arr idx) (#3%fxxor bitmap bit) (#3%fx1- count))])]
+			    [n (make-bnode* key=? (array-replace-value arr idx n) bitmap (#3%fx1- count))]
+			    [(#3%fx= bitmap bit) (if (#3%fxzero? shift) (empty-bnode key=?) #f)]
+			    [else (make-bnode* key=? (array-remove arr idx) (#3%fxxor bitmap bit) (#3%fx1- count))]))]
+		   [(key=? key k)
+		    (cond [(#3%fx= bitmap bit) (if (#3%fxzero? shift) (empty-bnode key=?) #f)]
+			  [else (make-bnode* key=? (array-remove arr idx) (#3%fxxor bitmap bit) (#3%fx1- count))])]
 		   [else node]))])))
 
 ;; cnodes
@@ -396,25 +382,25 @@
 	  (immutable hashcode)]
   [sealed #t])
 
-(define (cnode-ref eqtype node key)
-  (let ([idx (cnode-index eqtype node key)])
+(define (cnode-ref key=? node key)
+  (let ([idx (cnode-index key=? node key)])
     (if idx
 	(array-ref-value (cnode-array node) idx)
 	NOTHING)))
 
-(define (cnode-index eqtype node key)
+(define (cnode-index key=? node key)
   (let* ([arr (cnode-array node)]
 	 [len (array-length arr)])
     (let loop ([i 0])
       (cond [(< i len)
-	     (if (key=? eqtype key (array-ref-key arr i))
+	     (if (key=? key (array-ref-key arr i))
 		 i
 		 (loop (fx+ i 1)))]
 	    [else #f]))))
 
-(define (cnode-set eqtype node key val keyhash shift)
+(define (cnode-set key=? hash-code node key val keyhash shift)
   (cond [(#3%fx= keyhash (cnode-hashcode node))
-	 (let ([idx (cnode-index eqtype node key)]
+	 (let ([idx (cnode-index key=? node key)]
 	       [arr (cnode-array node)])
 	   (cond [idx
 		  (if (eq? val (array-ref-value arr idx))
@@ -425,12 +411,13 @@
 		    (values (make-cnode (array-insert arr len key val) keyhash) #t))]))]
 	[else
 	 (bnode-set
-	  eqtype
-	  (make-bnode* eqtype (vector #f node) (bnode-bit-pos (cnode-hashcode node) shift) 1)
+	  key=?
+	  hash-code
+	  (make-bnode* key=? (vector #f node) (bnode-bit-pos (cnode-hashcode node) shift) 1)
 	  key val keyhash shift)]))
 
-(define (cnode-remove eqtype node key)
-  (let ([idx (cnode-index eqtype node key)]
+(define (cnode-remove key=? node key)
+  (let ([idx (cnode-index key=? node key)]
 	[arr (cnode-array node)])
     (cond [(not idx) node]
 	  [(#3%fx= (array-length arr) 1) #f]
@@ -461,35 +448,35 @@
 
 (define (hamt-ref h key default)
   (let ([result
-	 (cond [(bnode/equal? h) (bnode-ref 'equal h key (equal-hash-code key) 0)]
-	       [(bnode/eq? h)    (bnode-ref 'eq    h key (eq-hash-code key) 0)]
-	       [else             (bnode-ref 'eqv   h key (eqv-hash-code key) 0)])])
+	 (cond [(bnode/equal? h) (bnode-ref equal? h key (equal-hash-code key) 0)]
+	       [(bnode/eq? h)    (bnode-ref eq?    h key (eq-hash-code key) 0)]
+	       [else             (bnode-ref eqv?   h key (eqv-hash-code key) 0)])])
     (if (eq? result NOTHING)
         (return default)
         result)))
 
 (define (hamt-set h key val)
   (define-values (n _)
-    (cond [(bnode/equal? h) (bnode-set 'equal h key val (equal-hash-code key) 0)]
-	  [(bnode/eq? h)    (bnode-set 'eq    h key val (eq-hash-code key) 0)]
-	  [else             (bnode-set 'eqv   h key val (eqv-hash-code key) 0)]))
+    (cond [(bnode/equal? h) (bnode-set equal? equal-hash-code h key val (equal-hash-code key) 0)]
+	  [(bnode/eq? h)    (bnode-set eq?    eq-hash-code    h key val (eq-hash-code key) 0)]
+	  [else             (bnode-set eqv?   eqv-hash-code   h key val (eqv-hash-code key) 0)]))
   n)
 
 (define (hamt-remove h key)
-  (cond [(bnode/equal? h) (bnode-remove 'equal h key (equal-hash-code key) 0)]
-	[(bnode/eq? h)    (bnode-remove 'eq    h key (eq-hash-code key) 0)]
-	[else             (bnode-remove 'eqv   h key (eqv-hash-code key) 0)]))
+  (cond [(bnode/equal? h) (bnode-remove equal? h key (equal-hash-code key) 0)]
+	[(bnode/eq? h)    (bnode-remove eq?    h key (eq-hash-code key) 0)]
+	[else             (bnode-remove eqv?   h key (eqv-hash-code key) 0)]))
 
 (define (hamt-keys-subset? a b)
-  (cond [(bnode/equal? a) (node-keys-subset? 'equal a b 0)]
-	[(bnode/eq? a)    (node-keys-subset? 'eq    a b 0)]
-	[else             (node-keys-subset? 'eqv   a b 0)]))
+  (cond [(bnode/equal? a) (node-keys-subset? equal? equal-hash-code a b 0)]
+	[(bnode/eq? a)    (node-keys-subset? eq?    eq-hash-code    a b 0)]
+	[else             (node-keys-subset? eqv?   eqv-hash-code   a b 0)]))
 
 (define (hamt=? a b eql? k)
   (and (= (bnode-count a) (bnode-count b))
-       (cond [(bnode/equal? a) (node=? 'equal a b eql? k 0)]
-	     [(bnode/eq? a)    (node=? 'eq    a b eql? k 0)]
-	     [else             (node=? 'eqv   a b eql? k 0)])))
+       (cond [(bnode/equal? a) (node=? equal? a b eql? k 0)]
+	     [(bnode/eq? a)    (node=? eq?    a b eql? k 0)]
+	     [else             (node=? eqv?   a b eql? k 0)])))
 
 (define (hamt-hash-code na f hc k)
   (node-hash-code na f hc k 0))
